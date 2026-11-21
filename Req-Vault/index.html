@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ReqVault</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--text:#1b1f24;--muted:#69727d;--line:#dde1e6;--accent:#2f6fed;--good:#1a7f37;--warn:#b26a00;--bad:#c62828;--code:#f1f3f5;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1216;--panel:#171b21;--text:#e6e9ed;--muted:#8b95a1;--line:#2a313a;--accent:#6b9bff;--good:#4cc26b;--warn:#e0a040;--bad:#ef6b6b;--code:#0d1014;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0f1216;--panel:#171b21;--text:#e6e9ed;--muted:#8b95a1;--line:#2a313a;--accent:#6b9bff;--good:#4cc26b;--warn:#e0a040;--bad:#ef6b6b;--code:#0d1014;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+header h1{font-size:16px;margin:0 auto 0 0}
+button,input,textarea{font:inherit;color:inherit}
+button{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{color:var(--bad)}
+input,textarea{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:6px 8px;width:100%}
+textarea{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;min-height:190px;resize:vertical;white-space:pre}
+main{display:grid;grid-template-columns:320px 1fr;gap:12px;padding:12px;min-height:calc(100vh - 56px)}
+@media(max-width:800px){main{grid-template-columns:1fr}}
+.side,.view{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px;min-width:0}
+.list{margin-top:8px;max-height:70vh;overflow:auto}
+.item{padding:8px;border:1px solid transparent;border-radius:6px;cursor:pointer}
+.item:hover{background:var(--code)}
+.item.sel{border-color:var(--accent);background:var(--code)}
+.item .t{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .m{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:10px;border:1px solid currentColor;margin-right:4px}
+.s2{color:var(--good)}.s3{color:var(--accent)}.s4{color:var(--warn)}.s5{color:var(--bad)}
+.tag{background:var(--code);border:1px solid var(--line);border-radius:10px;padding:0 7px;font-size:11px;margin-right:3px;color:var(--muted)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:800px){.row{grid-template-columns:1fr}}
+label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+pre{margin:0;background:var(--code);border:1px solid var(--line);border-radius:6px;padding:8px;overflow:auto;max-height:55vh;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.bar{display:flex;gap:6px;align-items:center;margin:6px 0;flex-wrap:wrap}
+.bar b{margin-right:auto}
+.muted{color:var(--muted)}
+.hide{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>ReqVault</h1>
+  <button class="primary" id="new">+ New</button>
+  <button id="exp">Export JSON</button>
+  <button id="imp">Import JSON</button>
+  <button id="theme">Theme</button>
+  <input type="file" id="file" accept=".json" class="hide">
+</header>
+<main>
+  <section class="side">
+    <input id="q" placeholder="Search everything (host, header, body, notes)…">
+    <div class="muted" id="count" style="margin-top:6px"></div>
+    <div class="list" id="list"></div>
+  </section>
+  <section class="view" id="view"></section>
+</main>
+<script>
+(function(){
+var items=[], sel=null, db=null, store='c';
+
+function openDB(){return new Promise(function(res,rej){
+  try{var r=indexedDB.open('reqvault',1);
+  r.onupgradeneeded=function(){r.result.createObjectStore(store,{keyPath:'id'})};
+  r.onsuccess=function(){res(r.result)};r.onerror=function(){rej(r.error)};}catch(e){rej(e)}})}
+function tx(mode){return db.transaction(store,mode).objectStore(store)}
+function dbAll(){return new Promise(function(res){try{var q=tx('readonly').getAll();q.onsuccess=function(){res(q.result)};q.onerror=function(){res([])}}catch(e){res([])}})}
+function dbPut(o){try{if(db)tx('readwrite').put(o)}catch(e){}}
+function dbDel(id){try{if(db)tx('readwrite').delete(id)}catch(e){}}
+
+function parse(req,resp){
+  var first=(req.split('\n')[0]||'').trim().split(/\s+/);
+  var method=first[0]||'?', path=first[1]||'/';
+  var hm=req.match(/^host:\s*(.+)$/im); var host=hm?hm[1].trim():'';
+  var sm=(resp.split('\n')[0]||'').match(/HTTP\/[\d.]+\s+(\d{3})/);
+  return {method:method,path:path,host:host,status:sm?+sm[1]:0};
+}
+function esc(s){return String(s)}
+function split(raw){
+  var i=raw.search(/\r?\n\r?\n/); if(i<0)return {head:raw,body:''};
+  var m=raw.slice(i).match(/^\r?\n\r?\n/);
+  return {head:raw.slice(0,i),body:raw.slice(i+m[0].length)};
+}
+function pretty(raw){
+  var p=split(raw), b=p.body.trim();
+  try{return p.head+'\n\n'+JSON.stringify(JSON.parse(b),null,2)}catch(e){return null}
+}
+function fmtDate(t){return new Date(t).toLocaleString()}
+function el(tag,attrs,kids){var e=document.createElement(tag);
+  for(var k in (attrs||{})){if(k==='text')e.textContent=attrs[k];else if(k==='class')e.className=attrs[k];else if(k.slice(0,2)==='on')e[k]=attrs[k];else e.setAttribute(k,attrs[k]);}
+  (kids||[]).forEach(function(c){e.appendChild(c)});return e}
+function sclass(s){return 's'+String(s)[0]}
+
+function renderList(){
+  var q=document.getElementById('q').value.toLowerCase().trim();
+  var list=document.getElementById('list'); list.textContent='';
+  var shown=items.filter(function(it){
+    if(!q)return true;
+    return (it.title+' '+it.tags+' '+it.notes+' '+it.host+' '+it.path+' '+it.req+' '+it.resp).toLowerCase().indexOf(q)>-1});
+  shown.sort(function(a,b){return b.created-a.created});
+  document.getElementById('count').textContent=shown.length+' of '+items.length+' saved';
+  shown.forEach(function(it){
+    var d=el('div',{class:'item'+(it.id===sel?' sel':''),onclick:function(){sel=it.id;renderList();renderView()}});
+    var t=el('div',{class:'t'});
+    if(it.status)t.appendChild(el('span',{class:'badge '+sclass(it.status),text:it.status}));
+    t.appendChild(document.createTextNode(it.title||(it.method+' '+it.path)));
+    d.appendChild(t);
+    d.appendChild(el('div',{class:'m',text:it.method+' '+it.host+it.path}));
+    var tg=el('div',{class:'m'});
+    (it.tags||'').split(',').map(function(x){return x.trim()}).filter(Boolean).forEach(function(x){tg.appendChild(el('span',{class:'tag',text:x}))});
+    d.appendChild(tg); list.appendChild(d);
+  });
+}
+
+function pane(title,raw){
+  var wrap=el('div'); var shownRaw=raw, isPretty=false;
+  var pre=el('pre',{text:raw||'(empty)'});
+  var bar=el('div',{class:'bar'},[el('b',{text:title})]);
+  var pb=el('button',{text:'Pretty JSON',onclick:function(){
+    if(isPretty){pre.textContent=raw;isPretty=false;pb.textContent='Pretty JSON';return}
+    var p=pretty(raw); if(p===null){pb.textContent='Not JSON';setTimeout(function(){pb.textContent='Pretty JSON'},1200);return}
+    pre.textContent=p;isPretty=true;pb.textContent='Show raw'}});
+  var cb=el('button',{text:'Copy',onclick:function(){
+    try{navigator.clipboard.writeText(raw).then(function(){cb.textContent='Copied';setTimeout(function(){cb.textContent='Copy'},1000)})}catch(e){}}});
+  bar.appendChild(pb);bar.appendChild(cb);wrap.appendChild(bar);wrap.appendChild(pre);return wrap}
+
+function renderView(){
+  var v=document.getElementById('view'); v.textContent='';
+  var it=items.filter(function(x){return x.id===sel})[0];
+  if(!it){v.appendChild(el('p',{class:'muted',text:'Select a saved item, or press “+ New” to paste a request and response.'}));return}
+  var top=el('div',{class:'bar'},[el('b',{text:it.title||(it.method+' '+it.path)}),
+    el('button',{text:'Edit',onclick:function(){renderForm(it)}}),
+    el('button',{class:'danger',text:'Delete',onclick:function(){
+      if(!confirm('Delete this item?'))return;
+      items=items.filter(function(x){return x.id!==it.id});dbDel(it.id);sel=null;renderList();renderView()}})]);
+  v.appendChild(top);
+  v.appendChild(el('div',{class:'muted',text:it.method+' '+it.host+it.path+' · status '+(it.status||'?')+' · saved '+fmtDate(it.created)}));
+  if(it.notes){v.appendChild(el('p',{text:it.notes}))}
+  var row=el('div',{class:'row'});
+  row.appendChild(pane('Request',it.req));row.appendChild(pane('Response',it.resp));
+  v.appendChild(row);
+}
+
+function renderForm(it){
+  var v=document.getElementById('view'); v.textContent='';
+  var f={}; 
+  function field(label,node){v.appendChild(el('label',{text:label}));v.appendChild(node);return node}
+  v.appendChild(el('div',{class:'bar'},[el('b',{text:it?'Edit item':'New item'})]));
+  f.title=field('Title (optional)',el('input',{placeholder:'e.g. IDOR on /api/orders/{id}'}));
+  f.tags=field('Tags (comma separated)',el('input',{placeholder:'idor, graphql, hollister'}));
+  var row=el('div',{class:'row'});
+  var l=el('div'),r=el('div');
+  l.appendChild(el('label',{text:'Raw request (paste from Caido or Burp)'}));
+  f.req=el('textarea',{placeholder:'GET /api/me HTTP/1.1\nHost: example.com\n…',spellcheck:'false'});l.appendChild(f.req);
+  r.appendChild(el('label',{text:'Raw response'}));
+  f.resp=el('textarea',{placeholder:'HTTP/1.1 200 OK\nContent-Type: application/json\n…',spellcheck:'false'});r.appendChild(f.resp);
+  row.appendChild(l);row.appendChild(r);v.appendChild(row);
+  f.notes=field('Notes',el('textarea',{style:'min-height:70px;white-space:pre-wrap;font-family:inherit',placeholder:'What did you test, what looked interesting?'}));
+  if(it){f.title.value=it.title||'';f.tags.value=it.tags||'';f.req.value=it.req;f.resp.value=it.resp;f.notes.value=it.notes||''}
+  v.appendChild(el('div',{class:'bar',style:'margin-top:10px'},[
+    el('button',{class:'primary',text:'Save',onclick:function(){
+      if(!f.req.value.trim()&&!f.resp.value.trim()){alert('Paste a request or a response first.');return}
+      var p=parse(f.req.value,f.resp.value);
+      var o=it||{id:Date.now()+'-'+Math.random().toString(36).slice(2,7),created:Date.now()};
+      o.title=f.title.value.trim();o.tags=f.tags.value;o.req=f.req.value;o.resp=f.resp.value;o.notes=f.notes.value;
+      o.method=p.method;o.host=p.host;o.path=p.path;o.status=p.status;
+      if(!it)items.push(o);dbPut(o);sel=o.id;renderList();renderView()}}),
+    el('button',{text:'Cancel',onclick:function(){renderView()}})]));
+  f.req.focus();
+}
+
+document.getElementById('new').onclick=function(){sel=null;renderList();renderForm(null)};
+document.getElementById('q').oninput=renderList;
+document.getElementById('exp').onclick=function(){
+  var blob=new Blob([JSON.stringify({version:1,items:items},null,2)],{type:'application/json'});
+  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='reqvault-backup-'+new Date().toISOString().slice(0,10)+'.json';
+  document.body.appendChild(a);a.click();a.remove()};
+document.getElementById('imp').onclick=function(){document.getElementById('file').click()};
+document.getElementById('file').onchange=function(e){
+  var fl=e.target.files[0];if(!fl)return;var rd=new FileReader();
+  rd.onload=function(){try{var d=JSON.parse(rd.result),n=0;
+    (d.items||[]).forEach(function(o){if(!items.some(function(x){return x.id===o.id})){items.push(o);dbPut(o);n++}});
+    renderList();alert('Imported '+n+' new items.')}catch(err){alert('Invalid backup file.')}};
+  rd.readAsText(fl);e.target.value=''};
+document.getElementById('theme').onclick=function(){
+  var r=document.documentElement,dark=getComputedStyle(r).colorScheme==='dark';
+  r.setAttribute('data-theme',dark?'light':'dark')};
+
+openDB().then(function(d){db=d;return dbAll()}).catch(function(){return []}).then(function(all){
+  items=all||[];renderList();renderView();
+  if(!items.length)renderForm(null)});
+})();
+</script>
+</body>
+</html>
